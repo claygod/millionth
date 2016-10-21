@@ -56,7 +56,42 @@ type Cursor struct {
 	lock   uint64
 }
 
-// Create - создать новую запись и получить её ID
+// Merge - создать новую запись присоединением и получить её ID
+func (m *Millionth) Merge(record []byte) uint64 {
+	curSwitch := m.swtch //atomic.LoadUuint64(&m.swtch)
+	var newSwitch uint64 = curSwitch + 1
+	if newSwitch >= uint64(POOL_SIZE) {
+		newSwitch = 0
+	}
+	m.swtch = newSwitch
+	numSection := m.cursors[curSwitch].cursor
+	for i := TRIAL_LIMIT; i > 0; i-- {
+		if atomic.CompareAndSwapUint64(&m.base[numSection].lock, 0, 1) {
+			break
+		}
+		if i == 5 {
+			return 0
+		}
+	}
+	m.base[numSection].data = append(m.base[numSection].data, record) //
+	m.base[numSection].length++
+	n := m.base[numSection].length
+	m.base[numSection].lock = 0
+	if n == SECTION_LIMIT {
+		m.mu.Lock()
+		sct := Section{}
+		sct.data = make([][]byte, 0, SECTION_SIZE)
+		sct.length = 0
+		sct.lock = 0
+		m.base = append(m.base, sct)
+		m.shift.cursor++
+		m.cursors[curSwitch].cursor = m.shift.cursor
+		m.mu.Unlock()
+	}
+	return (n - 1) + numSection<<32
+}
+
+// Create - создать новую запись копированием и получить её ID
 func (m *Millionth) Create(record []byte) uint64 {
 	curSwitch := m.swtch //atomic.LoadUuint64(&m.swtch)
 	var newSwitch uint64 = curSwitch + 1

@@ -257,6 +257,29 @@ func BenchmarkCreateParallel(b *testing.B) {
 	})
 }
 
+func BenchmarkMerge(b *testing.B) {
+	b.StopTimer()
+	m := New()
+	b.StartTimer()
+	m.Merge([]byte{200, 201, 202})
+	for i := 0; i < b.N; i++ {
+		m.Merge([]byte{200})
+	}
+}
+
+func BenchmarkMergeParallel(b *testing.B) {
+	b.StopTimer()
+	m := New()
+	m.Merge([]byte{200, 111, 112})
+	//b.SetParallelism(1000)
+	b.StartTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			m.Merge([]byte{200})
+		}
+	})
+}
+
 /*
 func BenchmarkAddMap(b *testing.B) {
 	b.StopTimer()
