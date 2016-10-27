@@ -57,6 +57,8 @@ type Cursor struct {
 }
 
 // Merge - создать новую запись присоединением и получить её ID
+// Эта функция полученные данные ПРИСОЕДИНЯЕТ в новую запись, т.е.
+// клиентский код МОЖЕТ её в дальнейшем изменить коственно.
 func (m *Millionth) Merge(record []byte) uint64 {
 	curSwitch := m.swtch //atomic.LoadUuint64(&m.swtch)
 	var newSwitch uint64 = curSwitch + 1
@@ -92,6 +94,8 @@ func (m *Millionth) Merge(record []byte) uint64 {
 }
 
 // Create - создать новую запись копированием и получить её ID
+// Эта функция полученные данные КОПИРУЕТ в новую запись, т.е.
+// клиентский код НЕ может её в дальнейшем изменить коственно.
 func (m *Millionth) Create(record []byte) uint64 {
 	curSwitch := m.swtch //atomic.LoadUuint64(&m.swtch)
 	var newSwitch uint64 = curSwitch + 1
