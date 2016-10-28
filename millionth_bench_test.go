@@ -19,6 +19,29 @@ const ADD_COUNT = 700000
 
 // Test add new, ns/op
 
+func BenchmarkCreate(b *testing.B) {
+	b.StopTimer()
+	m := New()
+	b.StartTimer()
+	m.Create([]byte{200, 201, 202})
+	for i := 0; i < b.N; i++ {
+		m.Create([]byte{200})
+	}
+}
+
+func BenchmarkCreateParallel(b *testing.B) {
+	b.StopTimer()
+	m := New()
+	m.Create([]byte{200, 111, 112})
+	//b.SetParallelism(1000)
+	b.StartTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			m.Create([]byte{200})
+		}
+	})
+}
+
 func BenchmarkWrite(b *testing.B) {
 	limit := uint64(65000)
 	b.StopTimer()
@@ -230,29 +253,6 @@ func BenchmarkReadParallel(b *testing.B) {
 				counter = 1
 			}
 			counter++
-		}
-	})
-}
-
-func BenchmarkCreate(b *testing.B) {
-	b.StopTimer()
-	m := New()
-	b.StartTimer()
-	m.Create([]byte{200, 201, 202})
-	for i := 0; i < b.N; i++ {
-		m.Create([]byte{200})
-	}
-}
-
-func BenchmarkCreateParallel(b *testing.B) {
-	b.StopTimer()
-	m := New()
-	m.Create([]byte{200, 111, 112})
-	//b.SetParallelism(1000)
-	b.StartTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			m.Create([]byte{200})
 		}
 	})
 }

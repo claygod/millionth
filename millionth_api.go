@@ -60,35 +60,16 @@ type Cursor struct {
 // Эта функция полученные данные ПРИСОЕДИНЯЕТ в новую запись, т.е.
 // клиентский код МОЖЕТ её в дальнейшем изменить коственно.
 func (m *Millionth) Merge(record []byte) uint64 {
-	curSwitch := m.swtch //atomic.LoadUuint64(&m.swtch)
-	var newSwitch uint64 = curSwitch + 1
-	if newSwitch >= uint64(POOL_SIZE) {
-		newSwitch = 0
+	numSection, curSwitch := m.getNumSection()
+	if !m.lock(&m.base[numSection].lock) {
+		return 0
 	}
-	m.swtch = newSwitch
-	numSection := m.cursors[curSwitch].cursor
-	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(&m.base[numSection].lock, 0, 1) {
-			break
-		}
-		if i == 5 {
-			return 0
-		}
-	}
-	m.base[numSection].data = append(m.base[numSection].data, record) //
+	m.base[numSection].data = append(m.base[numSection].data, record)
 	m.base[numSection].length++
 	n := m.base[numSection].length
 	m.base[numSection].lock = 0
 	if n == SECTION_LIMIT {
-		m.mu.Lock()
-		sct := Section{}
-		sct.data = make([][]byte, 0, SECTION_SIZE)
-		sct.length = 0
-		sct.lock = 0
-		m.base = append(m.base, sct)
-		m.shift.cursor++
-		m.cursors[curSwitch].cursor = m.shift.cursor
-		m.mu.Unlock()
+		m.createNewSection(curSwitch)
 	}
 	return (n - 1) + numSection<<32
 }
@@ -97,62 +78,31 @@ func (m *Millionth) Merge(record []byte) uint64 {
 // Эта функция полученные данные КОПИРУЕТ в новую запись, т.е.
 // клиентский код НЕ может её в дальнейшем изменить коственно.
 func (m *Millionth) Create(record []byte) uint64 {
-	curSwitch := m.swtch //atomic.LoadUuint64(&m.swtch)
-	var newSwitch uint64 = curSwitch + 1
-	if newSwitch >= uint64(POOL_SIZE) {
-		newSwitch = 0
+	numSection, curSwitch := m.getNumSection()
+	if !m.lock(&m.base[numSection].lock) {
+		return 0
 	}
-	m.swtch = newSwitch                       // atomic.CompareAndSwapUint64(&m.swtch, curSwitch, newSwitch)
-	numSection := m.cursors[curSwitch].cursor // numSection := atomic.LoadUint64(&m.cursors[curSwitch].cursor)
-	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(&m.base[numSection].lock, 0, 1) {
-			break
-		}
-		if i == 5 {
-			return 0
-		}
-	}
-	m.base[numSection].data = append(m.base[numSection].data, []byte{}) // record
+	m.base[numSection].data = append(m.base[numSection].data, []byte{})
 	m.base[numSection].length++
 	n := m.base[numSection].length
 	m.base[numSection].data[n-1] = append(m.base[numSection].data[n-1], record...)
-	m.base[numSection].lock = 0 // atomic.StoreUint64(&m.base[numSection].lock, 0)
-	//m.unlock(&m.base[numSection].lock)
+	m.base[numSection].lock = 0
 	if n == SECTION_LIMIT {
-		m.mu.Lock()
-		sct := Section{}
-		sct.data = make([][]byte, 0, SECTION_SIZE)
-		sct.length = 0
-		sct.lock = 0
-		m.base = append(m.base, sct)
-		m.shift.cursor++
-		m.cursors[curSwitch].cursor = m.shift.cursor
-		m.mu.Unlock()
+		m.createNewSection(curSwitch)
 	}
 	return (n - 1) + numSection<<32
 }
 
 // Read - прочитать содержимое записи
 func (m *Millionth) Read(id uint64) []byte {
-
 	numSection := id >> 32
 	numRecord := (id << 32) >> 32 // uint64(uint32(id))
-	//test := numRecord + numSection<<32
-	//fmt.Print("\n `base` ", m.base)
-	//fmt.Print("\n `секци` ", m.base[numSection])
-	//fmt.Print("\n `запрос` ", id, ", numSection: ", numSection, ", numRecord: ", numRecord, " test: ", test)
-
 	if m.shift.cursor < numSection ||
 		m.base[numSection].length < numRecord { // || ns.data == nil || ns.data[numRecord] == nil
 		return nil
 	}
-	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(&m.base[numSection].lock, 0, 1) {
-			break
-		}
-		if i == 5 {
-			return nil
-		}
+	if !m.lock(&m.base[numSection].lock) {
+		return nil
 	}
 	out := m.base[numSection].data[numRecord]
 	m.base[numSection].lock = 0
@@ -167,20 +117,14 @@ func (m *Millionth) Delete(id uint64) bool {
 		m.base[numSection].length < numRecord {
 		return false
 	}
-	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(&m.base[numSection].lock, 0, 1) {
-			break
-		}
-		if i == 5 {
-			return false
-		}
+	if !m.lock(&m.base[numSection].lock) {
+		return false
 	}
 	if m.base[numSection].data[numRecord] != nil {
 		m.base[numSection].data[numRecord] = nil
 		m.base[numSection].lock = 0
 		return true
 	}
-
 	m.base[numSection].lock = 0
 	return false
 }
@@ -191,16 +135,10 @@ func (m *Millionth) Add(id uint64, record []byte) bool {
 	numRecord := (id << 32) >> 32
 	if m.shift.cursor < numSection ||
 		m.base[numSection].length < numRecord {
-		//fmt.Print("\n-errr")
 		return false
 	}
-	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(&m.base[numSection].lock, 0, 1) {
-			break
-		}
-		if i == 5 {
-			return false
-		}
+	if !m.lock(&m.base[numSection].lock) {
+		return false
 	}
 	m.base[numSection].data[numRecord] = append(m.base[numSection].data[numRecord], record...)
 	m.base[numSection].lock = 0
@@ -213,16 +151,10 @@ func (m *Millionth) Write(id uint64, record []byte) bool {
 	numRecord := (id << 32) >> 32
 	if m.shift.cursor < numSection ||
 		m.base[numSection].length < numRecord {
-		//fmt.Print("\n-errr")
 		return false
 	}
-	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(&m.base[numSection].lock, 0, 1) {
-			break
-		}
-		if i == 5 {
-			return false
-		}
+	if !m.lock(&m.base[numSection].lock) {
+		return false
 	}
 	m.base[numSection].data[numRecord] = []byte{}
 	m.base[numSection].data[numRecord] = append(m.base[numSection].data[numRecord], record...)
@@ -230,9 +162,31 @@ func (m *Millionth) Write(id uint64, record []byte) bool {
 	return true
 }
 
+func (m *Millionth) createNewSection(curSwitch uint64) {
+	m.mu.Lock()
+	sct := Section{}
+	sct.data = make([][]byte, 0, SECTION_SIZE)
+	sct.length = 0
+	sct.lock = 0
+	m.base = append(m.base, sct)
+	m.shift.cursor++
+	m.cursors[curSwitch].cursor = m.shift.cursor
+	m.mu.Unlock()
+}
+
+func (m *Millionth) getNumSection() (uint64, uint64) {
+	curSwitch := m.swtch //atomic.LoadUuint64(&m.swtch)
+	var newSwitch uint64 = curSwitch + 1
+	if newSwitch >= uint64(POOL_SIZE) {
+		newSwitch = 0
+	}
+	m.swtch = newSwitch                           // atomic.CompareAndSwapUint64(&m.swtch, curSwitch, newSwitch)
+	return m.cursors[curSwitch].cursor, curSwitch // numSection := atomic.LoadUint64(&m.cursors[curSwitch].cursor)
+}
+
 func (m *Millionth) lock(lock *uint64) bool {
 	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(lock, 0, 1) {
+		if *lock == 0 && atomic.CompareAndSwapUint64(lock, 0, 1) {
 			break
 		}
 		if i == 5 {
@@ -244,7 +198,7 @@ func (m *Millionth) lock(lock *uint64) bool {
 
 func (m *Millionth) unlock(lock *uint64) bool {
 	for i := TRIAL_LIMIT; i > 0; i-- {
-		if atomic.CompareAndSwapUint64(lock, 1, 0) {
+		if *lock == 0 && atomic.CompareAndSwapUint64(lock, 1, 0) {
 			break
 		}
 		if i == 5 {
